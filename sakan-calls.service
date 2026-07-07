@@ -1,0 +1,13 @@
+[Unit]
+Description=Sakan Call Platform
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/sakan-calls
+Environment=UPLOAD_TOKEN=REPLACE_TOKEN
+Environment=PORT=8090
+ExecStart=/opt/sakan-calls/venv/bin/python /opt/sakan-calls/call_platform_server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
