@@ -26,7 +26,7 @@ import threading
 import datetime as dt
 from pathlib import Path
 
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, g, send_file, Response
 from flask_cors import CORS
 import requests
 
@@ -261,6 +261,15 @@ def call_detail(call_id):
     return jsonify(d)
 
 
+@app.route("/api/calls/<int:call_id>/audio")
+def call_audio(call_id):
+    """يقدّم ملف صوت المكالمة عشان نسمعها من المنصة."""
+    r = db().execute("SELECT audio_path FROM calls WHERE id=?", (call_id,)).fetchone()
+    if not r or not r["audio_path"] or not os.path.exists(r["audio_path"]):
+        return jsonify({"error": "audio not found"}), 404
+    return send_file(r["audio_path"], mimetype="audio/mpeg")
+
+
 @app.route("/api/health")
 def health():
     n = db().execute("SELECT COUNT(*) c FROM calls").fetchone()["c"]
@@ -268,8 +277,72 @@ def health():
                     "transcription_ready": bool(OPENAI_API_KEY)})
 
 
+@app.route("/")
+def dashboard():
+    return Response(DASHBOARD_HTML, mimetype="text/html; charset=utf-8")
+
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sales Sakan</title>
+<style>
+ *{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',Tahoma,Arial,sans-serif}
+ body{background:#f4f6fb;color:#1b2440;padding:16px}
+ .wrap{max-width:1100px;margin:0 auto}
+ .head{background:linear-gradient(135deg,#1e3a8a,#2547b0);color:#fff;border-radius:16px;padding:20px 24px;margin-bottom:16px}
+ .head h1{font-size:22px} .head p{font-size:13px;opacity:.9;margin-top:4px}
+ .bar{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+ .kpi{background:#fff;border:1px solid #e4e9f2;border-radius:14px;padding:14px 18px;flex:1;min-width:140px}
+ .kpi .n{font-size:24px;font-weight:800;color:#1e3a8a} .kpi .l{font-size:12px;color:#64708c;margin-top:3px}
+ table{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden}
+ th,td{padding:13px 14px;text-align:right;font-size:14px;border-bottom:1px solid #eef1f7}
+ th{background:#1a2233;color:#fff;font-size:13px}
+ tr:hover td{background:#f6f9ff}
+ .tag{padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
+ .out{background:#e6f0fd;color:#2547b0} .inc{background:#e7f7ee;color:#16a34a}
+ .play{background:#1e3a8a;color:#fff;border:none;padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px}
+ .player{position:fixed;bottom:0;left:0;right:0;background:#0f1a3a;color:#fff;padding:12px 20px;display:none;align-items:center;gap:14px}
+ .player.show{display:flex} .player b{font-size:14px} .player audio{flex:1}
+ .empty{text-align:center;color:#64708c;padding:50px;font-size:15px}
+ .refresh{background:#fff;border:1px solid #e4e9f2;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:13px;color:#1e3a8a;font-weight:600}
+</style></head><body>
+<div class="wrap">
+ <div class="head"><h1>Sales Sakan - متابعة المكالمات</h1>
+   <p>كل مكالمات فريق السيلز في مكان واحد - اضغطي تشغيل لسماع أي مكالمة</p></div>
+ <div class="bar" id="kpis"></div>
+ <div style="margin-bottom:10px;text-align:left"><button class="refresh" onclick="load()">تحديث</button></div>
+ <table><thead><tr><th>الموظف</th><th>الرقم</th><th>الاتجاه</th><th>المدة</th><th>الوقت</th><th>الحالة</th><th></th></tr></thead>
+   <tbody id="rows"><tr><td colspan="7" class="empty">جاري التحميل...</td></tr></tbody></table>
+</div>
+<div class="player" id="player"><b id="pl-title">-</b><audio id="au" controls></audio>
+  <button class="refresh" style="background:#28304a;color:#fff;border:none" onclick="hide()">اغلاق</button></div>
+<script>
+function fmt(s){s=parseInt(s||0);var m=Math.floor(s/60),x=s%60;return m+':'+(x<10?'0':'')+x}
+function dir(d){return d=='incoming'?'<span class="tag inc">وارد</span>':'<span class="tag out">صادر</span>'}
+async function load(){
+ var rows=document.getElementById('rows');
+ try{
+  var r=await fetch('/api/calls'); var c=await r.json();
+  document.getElementById('kpis').innerHTML=
+    '<div class="kpi"><div class="n">'+c.length+'</div><div class="l">اجمالي المكالمات</div></div>'+
+    '<div class="kpi"><div class="n">'+new Set(c.map(function(x){return x.rep_name})).size+'</div><div class="l">عدد الموظفين</div></div>'+
+    '<div class="kpi"><div class="n">'+c.filter(function(x){return x.direction=='incoming'}).length+'</div><div class="l">مكالمات واردة</div></div>';
+  if(!c.length){rows.innerHTML='<tr><td colspan="7" class="empty">لسه مفيش مكالمات - اعملي مكالمة تجريبية</td></tr>';return}
+  rows.innerHTML=c.map(function(x){return '<tr><td>'+(x.rep_name||'-')+'</td><td>'+(x.phone_number||'-')+'</td><td>'+dir(x.direction)+'</td><td>'+fmt(x.duration_sec)+'</td><td>'+(x.started_at||'').replace('T',' ').slice(0,16)+'</td><td>'+(x.status||'')+'</td><td><button class="play" onclick="play('+x.id+')">تشغيل</button></td></tr>'}).join('');
+ }catch(e){rows.innerHTML='<tr><td colspan="7" class="empty">تعذر الاتصال بالسيرفر</td></tr>'}
+}
+function play(id){
+ var p=document.getElementById('player'),a=document.getElementById('au');
+ document.getElementById('pl-title').textContent='تشغيل مكالمة رقم '+id;
+ a.src='/api/calls/'+id+'/audio'; p.classList.add('show'); a.play().catch(function(){});
+}
+function hide(){var a=document.getElementById('au');a.pause();document.getElementById('player').classList.remove('show')}
+load();
+</script></body></html>"""
+
+
 if __name__ == "__main__":
     init_db()
-    print(f"✅ Sakan Call Platform — يعمل على المنفذ {PORT}")
-    print(f"   التفريغ {'مفعّل' if OPENAI_API_KEY else 'غير مفعّل (أضف OPENAI_API_KEY)'}")
+    print("Sakan Call Platform running on port", PORT)
     app.run(host="0.0.0.0", port=PORT)
