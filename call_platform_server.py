@@ -28,6 +28,7 @@ from pathlib import Path
 
 from flask import Flask, request, jsonify, g, send_file, Response
 from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 
 # ------------------------------------------------------------------ الإعدادات
@@ -37,6 +38,7 @@ DB_PATH       = BASE_DIR / "calls.db"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")   # <-- حطّ المفتاح هنا أو كـ env
 UPLOAD_TOKEN   = os.environ.get("UPLOAD_TOKEN", "sakan-secret-token")  # حماية بسيطة للرفع
 PORT           = int(os.environ.get("PORT", 8090))
+ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN", UPLOAD_TOKEN)
 
 STORAGE_DIR.mkdir(exist_ok=True)
 
@@ -342,7 +344,110 @@ load();
 </script></body></html>"""
 
 
+
+# ------------------------------------------------------------------ المستخدمون (دخول السيلز)
+def init_users():
+    con = sqlite3.connect(DB_PATH)
+    con.execute("""CREATE TABLE IF NOT EXISTS users(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE, name TEXT, pass_hash TEXT, created_at TEXT)""")
+    con.commit(); con.close()
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    d = request.get_json(force=True, silent=True) or request.form
+    u = (d.get("username") or "").strip()
+    p = d.get("password") or ""
+    row = db().execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
+    if not row or not check_password_hash(row["pass_hash"], p):
+        return jsonify({"ok": False, "error": "بيانات الدخول غير صحيحة"}), 401
+    return jsonify({"ok": True, "rep_id": u, "name": row["name"], "token": UPLOAD_TOKEN})
+
+
+@app.route("/api/admin/users", methods=["GET", "POST"])
+def admin_users():
+    if request.headers.get("X-Admin-Token") != ADMIN_TOKEN:
+        return jsonify({"error": "unauthorized"}), 401
+    if request.method == "POST":
+        d = request.get_json(force=True, silent=True) or request.form
+        u = (d.get("username") or "").strip()
+        n = (d.get("name") or "").strip()
+        p = d.get("password") or ""
+        if not u or not p:
+            return jsonify({"error": "username & password required"}), 400
+        try:
+            db().execute("INSERT INTO users(username,name,pass_hash,created_at) VALUES(?,?,?,?)",
+                         (u, n, generate_password_hash(p), dt.datetime.now().isoformat()))
+            db().commit()
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"ok": True})
+    rows = db().execute("SELECT username,name,created_at FROM users ORDER BY id").fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/admin")
+def admin_page():
+    return Response(ADMIN_HTML, mimetype="text/html; charset=utf-8")
+
+
+ADMIN_HTML = """<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sales Sakan - إدارة الموظفين</title>
+<style>
+ *{box-sizing:border-box;font-family:'Segoe UI',Tahoma,Arial,sans-serif}
+ body{background:#f4f6fb;color:#1b2440;padding:18px;max-width:640px;margin:auto}
+ .head{background:linear-gradient(135deg,#1e3a8a,#2547b0);color:#fff;border-radius:16px;padding:18px 22px;margin-bottom:16px}
+ .card{background:#fff;border:1px solid #e4e9f2;border-radius:14px;padding:18px;margin-bottom:16px}
+ input{width:100%;padding:11px;margin:6px 0;border:1px solid #cdd5e5;border-radius:9px;font-size:14px}
+ button{background:#1e3a8a;color:#fff;border:none;padding:11px 18px;border-radius:9px;cursor:pointer;font-size:14px;font-weight:600}
+ table{width:100%;border-collapse:collapse;margin-top:8px}
+ th,td{padding:9px;text-align:right;border-bottom:1px solid #eef1f7;font-size:14px}
+ th{color:#64708c}
+ .msg{font-size:13px;margin-top:8px}
+</style></head><body>
+<div class="head"><h2>Sales Sakan - إدارة الموظفين</h2><p style="font-size:13px;opacity:.9">أنشئي حسابات السيلز اللي بيدخلوا بيها على الأب</p></div>
+<div class="card">
+ <b>توكن الأدمن (مرة واحدة)</b>
+ <input id="tok" type="password" placeholder="ADMIN token">
+</div>
+<div class="card">
+ <b>إضافة سيلز جديد</b>
+ <input id="u" placeholder="اسم المستخدم (username) - مثلاً ahmed">
+ <input id="n" placeholder="الاسم الكامل - مثلاً أحمد محمد">
+ <input id="p" type="password" placeholder="الباسورد">
+ <button onclick="addUser()">➕ إضافة</button>
+ <div class="msg" id="msg"></div>
+</div>
+<div class="card">
+ <b>الموظفون الحاليون</b> <button style="float:left;padding:6px 12px" onclick="load()">تحديث</button>
+ <table><thead><tr><th>اسم المستخدم</th><th>الاسم</th><th>تاريخ الإنشاء</th></tr></thead>
+ <tbody id="rows"><tr><td colspan=3>اكتبي التوكن واضغطي تحديث</td></tr></tbody></table>
+</div>
+<script>
+function tok(){return document.getElementById('tok').value.trim()}
+async function addUser(){
+ var m=document.getElementById('msg');
+ var body={username:document.getElementById('u').value.trim(),name:document.getElementById('n').value.trim(),password:document.getElementById('p').value};
+ var r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':tok()},body:JSON.stringify(body)});
+ var j=await r.json();
+ if(j.ok){m.style.color='green';m.textContent='تمت الإضافة ✅';document.getElementById('u').value='';document.getElementById('n').value='';document.getElementById('p').value='';load()}
+ else{m.style.color='red';m.textContent='خطأ: '+(j.error||'')}
+}
+async function load(){
+ var r=await fetch('/api/admin/users',{headers:{'X-Admin-Token':tok()}});
+ if(!r.ok){document.getElementById('rows').innerHTML='<tr><td colspan=3>توكن غير صحيح</td></tr>';return}
+ var a=await r.json();
+ document.getElementById('rows').innerHTML=a.length?a.map(function(x){return '<tr><td>'+x.username+'</td><td>'+(x.name||'')+'</td><td>'+(x.created_at||'').slice(0,10)+'</td></tr>'}).join(''):'<tr><td colspan=3>لا يوجد موظفون بعد</td></tr>';
+}
+</script></body></html>"""
+
+
+
 if __name__ == "__main__":
     init_db()
+    init_users()
     print("Sakan Call Platform running on port", PORT)
     app.run(host="0.0.0.0", port=PORT)
