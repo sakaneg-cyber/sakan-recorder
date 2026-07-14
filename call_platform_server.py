@@ -308,6 +308,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
  .player.show{display:flex} .player b{font-size:14px} .player audio{flex:1}
  .empty{text-align:center;color:#64708c;padding:50px;font-size:15px}
  .refresh{background:#fff;border:1px solid #e4e9f2;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:13px;color:#1e3a8a;font-weight:600}
+ @media(max-width:640px){.head h1{font-size:18px}.wrap{padding:0}th,td{padding:9px 7px;font-size:12px}.kpi{min-width:100px;padding:10px 12px}.kpi .n{font-size:20px}.play{padding:6px 10px;font-size:12px}} table{display:block;overflow-x:auto;white-space:nowrap}
 </style></head><body>
 <div class="wrap">
  <div class="head"><h1>Sales Sakan - متابعة المكالمات</h1>
